@@ -1,0 +1,58 @@
+name: collect-hc
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "space-separated tokens: YEAR or YEAR:i/N (shard)"
+        required: true
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      years: ${{ steps.m.outputs.years }}
+    steps:
+      - id: m
+        run: |
+          YEARS='${{ inputs.years }}'
+          echo "years=$(echo $YEARS | tr ' ' '\n' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  collect:
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        year: ${{ fromJson(needs.matrix.outputs.years) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pymupdf
+      - name: collect
+        run: |
+          mkdir -p out /tmp/scratch
+          TOKEN="${{ matrix.year }}"
+          YEAR="${TOKEN%%:*}"
+          SHARD=""
+          [[ "$TOKEN" == *:* ]] && SHARD="--shard ${TOKEN#*:}"
+          python collect_hc.py --out out --from-year "$YEAR" \
+            --to-year "$YEAR" --workers 4 --tmp /tmp/scratch $SHARD
+      - name: safe-name
+        id: nm
+        run: echo "name=$(echo '${{ matrix.year }}' | tr ':/' '--')" >> "$GITHUB_OUTPUT"
+      - name: pack
+        run: |
+          cd out
+          tar -czf ../hc-${{ steps.nm.outputs.name }}.tar.gz judgments ocr-queue 2>/dev/null || \
+          tar -czf ../hc-${{ steps.nm.outputs.name }}.tar.gz judgments
+          ls -la ../hc-${{ steps.nm.outputs.name }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hc-${{ steps.nm.outputs.name }}
+          path: hc-${{ steps.nm.outputs.name }}.tar.gz
+          retention-days: 7
+          compression-level: 0
