@@ -31,7 +31,7 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ID/zip" > a.zip
             unzip -qo a.zip   # contains <something>.tar.gz
             FILE=$(ls *.tar.gz | head -1)
-            mv "$FILE" "$NAME.tar.gz"
+            [ "$FILE" != "$NAME.tar.gz" ] && mv "$FILE" "$NAME.tar.gz"
             gh release upload "${{ inputs.tag }}" "$NAME.tar.gz" -R "$GITHUB_REPOSITORY" --clobber
             rm -f a.zip "$NAME.tar.gz"
           done
