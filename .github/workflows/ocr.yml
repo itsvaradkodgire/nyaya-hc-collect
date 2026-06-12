@@ -1,0 +1,70 @@
+name: ocr
+on:
+  workflow_dispatch:
+    inputs:
+      artifacts:
+        description: "space-separated artifact names (e.g. hc-2022-0-4)"
+        required: true
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      arts: ${{ steps.m.outputs.arts }}
+    steps:
+      - id: m
+        run: |
+          A='${{ inputs.artifacts }}'
+          echo "arts=$(echo $A | tr ' ' '\n' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  ocr:
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        art: ${{ fromJson(needs.matrix.outputs.arts) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr \
+            tesseract-ocr-hin tesseract-ocr-tam tesseract-ocr-tel \
+            tesseract-ocr-kan tesseract-ocr-mal tesseract-ocr-guj \
+            tesseract-ocr-pan tesseract-ocr-ben tesseract-ocr-ori \
+            tesseract-ocr-mar tesseract-ocr-urd tesseract-ocr-asm \
+            tesseract-ocr-nep
+          pip install --quiet pymupdf
+      - name: fetch collection artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p work
+          ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=100&name=${{ matrix.art }}" \
+            --jq '.artifacts[] | select(.expired==false) | .id' | head -1)
+          [ -n "$ID" ] || { echo "artifact not found"; exit 1; }
+          gh api "repos/${{ github.repository }}/actions/artifacts/$ID/zip" > work/a.zip
+          cd work && unzip -qo a.zip && tar -xzf *.tar.gz && rm -f a.zip *.tar.gz
+          ls | head
+      - name: ocr
+        run: |
+          if [ ! -d work/ocr-queue ]; then
+            echo "no ocr-queue in this artifact"; mkdir -p out/judgments
+          else
+            python ocr_worker.py --queue work/ocr-queue --out out
+          fi
+      - name: pack
+        run: |
+          mkdir -p out/judgments
+          tar -czf ocr-${{ matrix.art }}.tar.gz -C out judgments
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ocr-${{ matrix.art }}
+          path: ocr-${{ matrix.art }}.tar.gz
+          retention-days: 7
