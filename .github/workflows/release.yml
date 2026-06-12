@@ -23,16 +23,25 @@ jobs:
           gh release view "${{ inputs.tag }}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "${{ inputs.tag }}" -R "$GITHUB_REPOSITORY" \
               --title "${{ inputs.tag }}" --notes "artifact mirror for fast CDN download"
+          EXISTING=$(gh release view "${{ inputs.tag }}" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          FAILED=0
           for NAME in ${{ inputs.names }}; do
-            ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100&name=$NAME" \
-              --jq '.artifacts[] | select(.expired==false) | .id' | head -1)
-            [ -n "$ID" ] || { echo "skip $NAME (not found)"; continue; }
-            echo "fetch $NAME ($ID)"
-            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ID/zip" > a.zip
-            unzip -qo a.zip   # contains <something>.tar.gz
-            FILE=$(ls *.tar.gz | head -1)
-            [ "$FILE" != "$NAME.tar.gz" ] && mv "$FILE" "$NAME.tar.gz"
-            gh release upload "${{ inputs.tag }}" "$NAME.tar.gz" -R "$GITHUB_REPOSITORY" --clobber
-            rm -f a.zip "$NAME.tar.gz"
+            if echo "$EXISTING" | grep -qx "$NAME.tar.gz"; then
+              echo "skip $NAME (already uploaded)"; continue
+            fi
+            (
+              set -e
+              ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100&name=$NAME" \
+                --jq '.artifacts[] | select(.expired==false) | .id' | head -1)
+              [ -n "$ID" ] || { echo "skip $NAME (not found)"; exit 0; }
+              echo "fetch $NAME ($ID)"
+              gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ID/zip" > a.zip
+              unzip -qo a.zip
+              FILE=$(ls *.tar.gz | grep -v "^$NAME.tar.gz$" | head -1 || true)
+              [ -n "$FILE" ] && mv "$FILE" "$NAME.tar.gz"
+              gh release upload "${{ inputs.tag }}" "$NAME.tar.gz" -R "$GITHUB_REPOSITORY" --clobber
+            ) || { echo "FAILED $NAME"; FAILED=$((FAILED+1)); }
+            rm -f a.zip *.tar.gz
           done
-          echo "ALL UPLOADED"
+          echo "done, $FAILED failures"
+          [ "$FAILED" = "0" ]
