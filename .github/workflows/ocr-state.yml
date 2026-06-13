@@ -1,0 +1,57 @@
+name: ocr-state
+on:
+  workflow_dispatch: {}
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      states: ${{ steps.m.outputs.states }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: m
+        run: |
+          S=$(for d in ocr-queue-state/*/; do
+                n=$(find "$d" -name '*.pdf' | wc -l)
+                [ "$n" -gt 0 ] && basename "$d"
+              done | jq -R . | jq -sc .)
+          echo "states=$S" >> "$GITHUB_OUTPUT"
+          echo "$S"
+
+  ocr:
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        state: ${{ fromJson(needs.discover.outputs.states) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr \
+            tesseract-ocr-hin tesseract-ocr-tam tesseract-ocr-tel \
+            tesseract-ocr-kan tesseract-ocr-mal tesseract-ocr-guj \
+            tesseract-ocr-pan tesseract-ocr-ben tesseract-ocr-ori \
+            tesseract-ocr-mar tesseract-ocr-urd tesseract-ocr-asm \
+            tesseract-ocr-nep
+          pip install --quiet pymupdf
+      - name: ocr
+        run: |
+          python ocr_state_worker.py --queue ocr-queue-state \
+            --out out --states "${{ matrix.state }}"
+      - name: pack
+        run: |
+          mkdir -p out/statutes-state
+          tar -czf ocr-state-${{ matrix.state }}.tar.gz -C out statutes-state
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ocr-state-${{ matrix.state }}
+          path: ocr-state-${{ matrix.state }}.tar.gz
+          retention-days: 7
