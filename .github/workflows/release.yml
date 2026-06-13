@@ -39,9 +39,18 @@ jobs:
               unzip -qo a.zip
               FILE=$(ls *.tar.gz | grep -v "^$NAME.tar.gz$" | head -1 || true)
               [ -n "$FILE" ] && mv "$FILE" "$NAME.tar.gz"
-              gh release upload "${{ inputs.tag }}" "$NAME.tar.gz" -R "$GITHUB_REPOSITORY" --clobber
+              SIZE=$(stat -c%s "$NAME.tar.gz")
+              if [ "$SIZE" -gt 2000000000 ]; then
+                split -b 1900m "$NAME.tar.gz" "$NAME.tar.gz.part-"
+                rm -f "$NAME.tar.gz"
+                for P in "$NAME.tar.gz.part-"*; do
+                  gh release upload "${{ inputs.tag }}" "$P" -R "$GITHUB_REPOSITORY" --clobber
+                done
+              else
+                gh release upload "${{ inputs.tag }}" "$NAME.tar.gz" -R "$GITHUB_REPOSITORY" --clobber
+              fi
             ) || { echo "FAILED $NAME"; FAILED=$((FAILED+1)); }
-            rm -f a.zip *.tar.gz
+            rm -f a.zip *.tar.gz *.tar.gz.part-* 2>/dev/null || true
           done
           echo "done, $FAILED failures"
           [ "$FAILED" = "0" ]
